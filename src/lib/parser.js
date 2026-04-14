@@ -6,7 +6,14 @@ const PALETTE = [
 const colorMap = {};
 let colorIdx = 0;
 
+const TEAM_SEMANTIC_COLORS = {
+  RED: '#f43f5e',
+  BLUE: '#3b82f6',
+};
+
 export function getTeamColor(name) {
+  const upper = String(name).toUpperCase();
+  if (TEAM_SEMANTIC_COLORS[upper]) return TEAM_SEMANTIC_COLORS[upper];
   if (!colorMap[name]) colorMap[name] = PALETTE[colorIdx++ % PALETTE.length];
   return colorMap[name];
 }
@@ -43,6 +50,15 @@ export function formatAbsTime(sec) {
   return formatDuration(sec);
 }
 
+export function formatMs(ms) {
+  if (ms == null || isNaN(ms)) return '—';
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  const msRem = ms % 1000;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(msRem).padStart(3, '0')}`;
+}
+
 export function formatDuration(sec) {
   if (sec == null || isNaN(sec)) return '—';
   const tenths = Math.round(sec * 10) / 10;
@@ -59,60 +75,82 @@ const RE_GAME_OVER = /game_over=(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)(?:\s+\(\w+\))?\s
 
 export function parseFile(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('//'));
-  const rows = [];
-  const errors = [];
-  let gameOver = null;
+  const allErrors = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // Split lines into segments, each ending at a game_over marker
+  const segments = [];
+  let currentLines = [];
 
+  for (const line of lines) {
     const go = RE_GAME_OVER.exec(line);
     if (go) {
-      gameOver = {
-        ts: parseTimestamp(go[1]),
-        redMs: parseInt(go[2], 10),
-        blueMs: parseInt(go[3], 10),
-      };
-      continue;
-    }
-
-    let ts, player, team, dmg;
-    const kv = RE_KV.exec(line);
-    if (kv) {
-      ts = parseTimestamp(kv[1]);
-      player = kv[2];
-      team = kv[3];
-      dmg = parseFloat(kv[4]);
+      segments.push({
+        rawLines: currentLines,
+        gameOver: {
+          ts: parseTimestamp(go[1]),
+          redMs: parseInt(go[2], 10),
+          blueMs: parseInt(go[3], 10),
+        },
+      });
+      currentLines = [];
     } else {
-      const parts = line.split(',');
-      if (parts.length < 4) { errors.push(`Linia ${i + 1}: nieznany format — "${line}"`); continue; }
-      ts = parseTimestamp(parts[0]);
-      player = parts[1].trim();
-      team = parts[2].trim();
-      dmg = parseFloat(parts[3]);
+      currentLines.push(line);
     }
-
-    if (ts === null) { errors.push(`Linia ${i + 1}: nieprawidłowy timestamp`); continue; }
-    if (!player) { errors.push(`Linia ${i + 1}: brak nazwy gracza`); continue; }
-    if (!team) { errors.push(`Linia ${i + 1}: brak nazwy drużyny`); continue; }
-
-    rows.push({ ts, player, team, damage: isNaN(dmg) ? 0 : dmg, raw: line, lineNo: i + 1 });
+  }
+  if (currentLines.length > 0) {
+    segments.push({ rawLines: currentLines, gameOver: null });
   }
 
-  rows.sort((a, b) => a.ts - b.ts);
-  return { rows, errors, gameOver };
+  const games = segments.map((seg, gi) => {
+    const rows = [];
+    const playerTeam = {}; // tracks established team per player
+
+    for (let i = 0; i < seg.rawLines.length; i++) {
+      const line = seg.rawLines[i];
+      let ts, player, team, dmg;
+      const kv = RE_KV.exec(line);
+      if (kv) {
+        ts = parseTimestamp(kv[1]);
+        player = kv[2];
+        team = kv[3];
+        dmg = parseFloat(kv[4]);
+      } else {
+        const parts = line.split(',');
+        if (parts.length < 4) {
+          allErrors.push(`Gra ${gi + 1}, linia ${i + 1}: nieznany format — "${line}"`);
+          continue;
+        }
+        ts = parseTimestamp(parts[0]);
+        player = parts[1].trim();
+        team = parts[2].trim();
+        dmg = parseFloat(parts[3]);
+      }
+
+      if (ts === null) { allErrors.push(`Gra ${gi + 1}, linia ${i + 1}: nieprawidłowy timestamp`); continue; }
+      if (!player) { allErrors.push(`Gra ${gi + 1}, linia ${i + 1}: brak nazwy gracza`); continue; }
+      if (!team) { allErrors.push(`Gra ${gi + 1}, linia ${i + 1}: brak nazwy drużyny`); continue; }
+
+      if (!playerTeam[player]) {
+        playerTeam[player] = team;
+      } else if (playerTeam[player] !== team) {
+        allErrors.push(`Gra ${gi + 1}, linia ${i + 1}: gracz #${player} zmienił drużynę z ${playerTeam[player]} na ${team} — strzał zignorowany`);
+        continue;
+      }
+
+      rows.push({ ts, player, team, damage: isNaN(dmg) ? 0 : dmg, raw: line, lineNo: i + 1 });
+    }
+    rows.sort((a, b) => a.ts - b.ts);
+    return { rows, gameOver: seg.gameOver };
+  });
+
+  return { games, errors: allErrors };
 }
 
 export function buildSessions(rows, gameOver) {
   const sessions = [];
   let current = null;
 
-  // if game_over provides authoritative total time, infer true game start
-  // (server started counting before first logged shot)
   const gameOverTs = gameOver?.ts ?? null;
-  const inferredStart = (gameOver != null)
-    ? gameOver.ts - (gameOver.redMs + gameOver.blueMs) / 1000
-    : null;
 
   for (const row of rows) {
     if (!current || current.team !== row.team) {
@@ -129,10 +167,6 @@ export function buildSessions(rows, gameOver) {
         shots: [],
         damage: 0,
       };
-      // anchor first session to server-inferred start
-      if (sessions.length === 0 && inferredStart != null) {
-        current.start = inferredStart;
-      }
       sessions.push(current);
     }
     current.shots.push(row);
