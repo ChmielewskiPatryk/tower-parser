@@ -45,6 +45,9 @@ export default function App() {
   const [errors, setErrors] = useState([]);
   const [activeTab, setActiveTab] = useState('sessions');
   const [sortState, setSortState] = useState({ col: null, asc: false });
+  const [pendingData, setPendingData] = useState(null);
+  const [nameInputs, setNameInputs] = useState({});
+  const [playerNames, setPlayerNames] = useState({});
 
   const handleFile = (file) => {
     const reader = new FileReader();
@@ -61,7 +64,12 @@ export default function App() {
       const players = buildPlayerStats(rows, sessions);
       const teams = buildTeamStats(sessions, totalDuration);
 
-      setData({ rows, sessions, players, teams, startTs, totalDuration, gameOver });
+      const parsed = { rows, sessions, players, teams, startTs, totalDuration, gameOver };
+      const initInputs = {};
+      players.forEach(p => { initInputs[String(p.player)] = ''; });
+      setNameInputs(initInputs);
+      setPendingData(parsed);
+      setData(null);
       setSortState({ col: null, asc: false });
       setActiveTab('sessions');
     };
@@ -81,12 +89,12 @@ export default function App() {
   const sessionColumns = [
     { key: 'idx', label: '#', render: (_r, i) => i + 1 },
     { key: 'team', label: 'Drużyna', render: r => <TeamBadge name={r.team} /> },
-    { key: 'capturedBy', label: 'Przejął' },
+    { key: 'capturedBy', label: 'Przejął', render: r => playerLabel(r.capturedBy) },
     { key: 'duration', label: 'Czas kontroli', sortable: true, render: r => r.duration != null ? formatDuration(r.duration) : '—' },
   ];
 
   const playerColumns = [
-    { key: 'player', label: 'Gracz', render: r => <strong style={{ color: '#e2e4f0' }}>{r.player}</strong> },
+    { key: 'player', label: 'Gracz', render: r => <strong style={{ color: '#e2e4f0' }}>{playerLabel(r.player)}</strong> },
     { key: 'team', label: 'Drużyna', render: r => <TeamBadge name={r.team} /> },
     { key: 'shots', label: 'Strzałów' },
     { key: 'captures', label: 'Przejęć wieży', render: r => (
@@ -114,7 +122,7 @@ export default function App() {
       ) : '—'
     },
     { key: 'damage', label: 'Łączny DMG', render: r => r.damage.toLocaleString() },
-    { key: 'players', label: 'Gracze', render: r => r.players.join(', ') },
+    { key: 'players', label: 'Gracze', render: r => r.players.map(playerLabel).join(', ') },
   ];
 
 const TABS = [
@@ -122,6 +130,17 @@ const TABS = [
     { key: 'players', label: 'Gracze' },
     { key: 'teams', label: 'Drużyny' },
   ];
+
+  const confirmNames = () => {
+    setPlayerNames({ ...nameInputs });
+    setData(pendingData);
+    setPendingData(null);
+  };
+
+  const playerLabel = (id) => {
+    const name = playerNames[String(id)];
+    return name ? `#${id} ${name}` : `#${id}`;
+  };
 
   const handleSort = (col) => {
     setSortState(prev => ({ col, asc: prev.col === col ? !prev.asc : false }));
@@ -233,14 +252,14 @@ const TABS = [
                         <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
                           {team} — najdłużej trzymał
                         </div>
-                        <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e4f0' }}>#{topHold.player}</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e4f0' }}>{playerLabel(topHold.player)}</div>
                         <div style={{ fontSize: 13, color: color, marginTop: 2 }}>{formatDuration(topHold.holdTime)}</div>
                       </div>,
                       <div key={`${team}-cap`} style={{ background: '#12141f', border: '1px solid #252840', borderRadius: 10, padding: '14px 18px', borderTop: `2px solid ${color}` }}>
                         <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
                           {team} — najwięcej przejęć
                         </div>
-                        <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e4f0' }}>#{topCap.player}</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e4f0' }}>{playerLabel(topCap.player)}</div>
                         <div style={{ fontSize: 13, color: color, marginTop: 2 }}>{topCap.captures} przejęć</div>
                       </div>,
                     ];
@@ -304,6 +323,75 @@ const TABS = [
           </div>
         )}
       </div>
+
+      {/* Player name modal */}
+      {pendingData && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 100, backdropFilter: 'blur(4px)',
+        }}>
+          <div style={{
+            background: '#12141f', border: '1px solid #252840', borderRadius: 16,
+            padding: 32, minWidth: 360, maxWidth: 480, width: '100%',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+          }}>
+            <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#e2e4f0' }}>
+              Przypisz imiona graczy
+            </h2>
+            <p style={{ margin: '0 0 24px', fontSize: 13, color: '#6b7280' }}>
+              Opcjonalnie — możesz pominąć i edytować później.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {pendingData.players.map(p => (
+                <div key={p.player} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{
+                    fontSize: 12, fontWeight: 600, color: getTeamColor(p.team),
+                    background: '#0a0c14', border: `1px solid ${getTeamColor(p.team)}33`,
+                    borderRadius: 6, padding: '4px 10px', minWidth: 80, textAlign: 'center',
+                    flexShrink: 0,
+                  }}>
+                    {p.team} #{p.player}
+                  </span>
+                  <input
+                    type="text"
+                    placeholder={`Imię gracza #${p.player}`}
+                    value={nameInputs[String(p.player)] ?? ''}
+                    onChange={ev => setNameInputs(prev => ({ ...prev, [String(p.player)]: ev.target.value }))}
+                    onKeyDown={ev => { if (ev.key === 'Enter') confirmNames(); }}
+                    style={{
+                      flex: 1, background: '#0a0c14', border: '1px solid #252840',
+                      borderRadius: 8, padding: '8px 12px', color: '#e2e4f0',
+                      fontSize: 14, outline: 'none',
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 24, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setPlayerNames({}); setData(pendingData); setPendingData(null); }}
+                style={{
+                  padding: '8px 20px', borderRadius: 8, border: '1px solid #252840',
+                  background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14,
+                }}
+              >
+                Pomiń
+              </button>
+              <button
+                onClick={confirmNames}
+                style={{
+                  padding: '8px 24px', borderRadius: 8, border: 'none',
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+                }}
+              >
+                Potwierdź
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
