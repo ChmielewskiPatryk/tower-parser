@@ -6,7 +6,7 @@ import DataTable from './components/DataTable';
 import TeamBadge from './components/TeamBadge';
 import {
   parseFile, buildSessions, buildPlayerStats, buildTeamStats,
-  formatAbsTime, formatDuration, resetColors, getTeamColor,
+  formatDuration, resetColors, getTeamColor,
 } from './lib/parser';
 
 const ACCENT_COLORS = ['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6'];
@@ -50,18 +50,18 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (e) => {
       resetColors();
-      const { rows, errors: errs } = parseFile(e.target.result);
+      const { rows, errors: errs, gameOver } = parseFile(e.target.result);
       setErrors(errs);
       if (!rows.length) { setData(null); return; }
 
-      const sessions = buildSessions(rows);
-      const startTs = rows[0].ts;
-      const endTs = rows[rows.length - 1].ts;
+      const sessions = buildSessions(rows, gameOver ?? null);
+      const startTs = sessions[0]?.start ?? rows[0].ts;
+      const endTs = gameOver?.ts ?? rows[rows.length - 1].ts;
       const totalDuration = Math.max(endTs - startTs, 1);
       const players = buildPlayerStats(rows, sessions);
       const teams = buildTeamStats(sessions, totalDuration);
 
-      setData({ rows, sessions, players, teams, startTs, totalDuration });
+      setData({ rows, sessions, players, teams, startTs, totalDuration, gameOver });
       setSortState({ col: null, asc: false });
       setActiveTab('sessions');
     };
@@ -82,25 +82,20 @@ export default function App() {
     { key: 'idx', label: '#', render: (_r, i) => i + 1 },
     { key: 'team', label: 'Drużyna', render: r => <TeamBadge name={r.team} /> },
     { key: 'capturedBy', label: 'Przejął' },
-    { key: 'start', label: 'Start', render: r => formatAbsTime(r.start) },
-    { key: 'end', label: 'Koniec', render: r => r.end != null ? formatAbsTime(r.end) : <em style={{ color: '#6b7280' }}>koniec pliku</em> },
-    { key: 'duration', label: 'Czas utrzymania', sortable: true, render: r => r.duration != null ? formatDuration(r.duration) : '—' },
-    { key: 'damage', label: 'DMG', sortable: true, render: r => r.damage.toLocaleString() },
-    { key: 'shots', label: 'Strzałów', render: r => r.shots.length },
+    { key: 'duration', label: 'Czas kontroli', sortable: true, render: r => r.duration != null ? formatDuration(r.duration) : '—' },
   ];
 
   const playerColumns = [
     { key: 'player', label: 'Gracz', render: r => <strong style={{ color: '#e2e4f0' }}>{r.player}</strong> },
     { key: 'team', label: 'Drużyna', render: r => <TeamBadge name={r.team} /> },
     { key: 'shots', label: 'Strzałów' },
-    { key: 'damage', label: 'Łączny DMG', render: r => r.damage.toLocaleString() },
     { key: 'captures', label: 'Przejęć wieży', render: r => (
       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {r.captures > 0 && <span style={{ color: '#f59e0b' }}>⚑</span>}
         {r.captures}
       </span>
     )},
-    { key: 'avg', label: 'Avg DMG/strzał', render: r => r.shots ? Math.round(r.damage / r.shots) : 0 },
+    { key: 'holdTime', label: 'Czas kontroli', render: r => formatDuration(r.holdTime) },
   ];
 
   const teamColumns = [
@@ -122,22 +117,10 @@ export default function App() {
     { key: 'players', label: 'Gracze', render: r => r.players.join(', ') },
   ];
 
-  const rawColumns = [
-    { key: 'lineNo', label: '#' },
-    { key: 'ts', label: 'Czas', render: r => formatAbsTime(r.ts) },
-    { key: 'player', label: 'Gracz' },
-    { key: 'team', label: 'Drużyna', render: r => <TeamBadge name={r.team} /> },
-    { key: 'damage', label: 'DMG' },
-    { key: 'session', label: 'Sesja', render: r => r.session != null ? (
-      <span style={{ fontSize: 11, color: '#6b7280' }}>#{r.session + 1}</span>
-    ) : '' },
-  ];
-
-  const TABS = [
-    { key: 'sessions', label: 'Sesje' },
+const TABS = [
+    { key: 'sessions', label: 'Kontrola' },
     { key: 'players', label: 'Gracze' },
     { key: 'teams', label: 'Drużyny' },
-    { key: 'raw', label: 'Surowe dane' },
   ];
 
   const handleSort = (col) => {
@@ -183,7 +166,7 @@ export default function App() {
           <span>
             Obsługiwane formaty:&nbsp;
             <code style={{ background: '#0a0c14', borderRadius: 4, padding: '1px 6px', color: '#7dd3fc', fontFamily: 'Consolas, monospace', fontSize: 11 }}>
-              timestamp=2026-04-04 16:21:19 player=1 team=RED damage=1
+              timestamp=00:01:43.0 (uptime) player=1 team=RED damage=1
             </code>
             &nbsp;lub stary CSV:&nbsp;
             <code style={{ background: '#0a0c14', borderRadius: 4, padding: '1px 6px', color: '#7dd3fc', fontFamily: 'Consolas, monospace', fontSize: 11 }}>
@@ -224,14 +207,47 @@ export default function App() {
               marginBottom: 20,
             }}>
               {[
-                { label: 'Wierszy', value: data.rows.length, accent: ACCENT_COLORS[0] },
-                { label: 'Sesji', value: data.sessions.length, accent: ACCENT_COLORS[1] },
-                { label: 'Graczy', value: new Set(data.rows.map(r => r.player)).size, accent: ACCENT_COLORS[2] },
-                { label: 'Drużyn', value: new Set(data.rows.map(r => r.team)).size, accent: ACCENT_COLORS[3] },
-                { label: 'Łączny DMG', value: data.rows.reduce((a, r) => a + r.damage, 0).toLocaleString(), accent: ACCENT_COLORS[4] },
                 { label: 'Czas rozgrywki', value: formatDuration(data.totalDuration), accent: ACCENT_COLORS[0] },
+                ...(data.gameOver ? [
+                  { label: 'RED (oficjalnie)', value: `${(data.gameOver.redMs / 1000).toFixed(2)}s`, accent: '#f43f5e' },
+                  { label: 'BLUE (oficjalnie)', value: `${(data.gameOver.blueMs / 1000).toFixed(2)}s`, accent: '#06b6d4' },
+                ] : []),
               ].map(s => <StatCard key={s.label} {...s} />)}
             </div>
+
+            {/* Per-team highlights */}
+            {(() => {
+              const byTeam = {};
+              for (const p of data.players) {
+                if (!byTeam[p.team]) byTeam[p.team] = [];
+                byTeam[p.team].push(p);
+              }
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginBottom: 20 }}>
+                  {Object.entries(byTeam).map(([team, players]) => {
+                    const topHold = players.reduce((a, b) => b.holdTime > a.holdTime ? b : a);
+                    const topCap  = players.reduce((a, b) => b.captures > a.captures ? b : a);
+                    const color = getTeamColor(team);
+                    return [
+                      <div key={`${team}-hold`} style={{ background: '#12141f', border: '1px solid #252840', borderRadius: 10, padding: '14px 18px', borderTop: `2px solid ${color}` }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                          {team} — najdłużej trzymał
+                        </div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e4f0' }}>#{topHold.player}</div>
+                        <div style={{ fontSize: 13, color: color, marginTop: 2 }}>{formatDuration(topHold.holdTime)}</div>
+                      </div>,
+                      <div key={`${team}-cap`} style={{ background: '#12141f', border: '1px solid #252840', borderRadius: 10, padding: '14px 18px', borderTop: `2px solid ${color}` }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                          {team} — najwięcej przejęć
+                        </div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: '#e2e4f0' }}>#{topCap.player}</div>
+                        <div style={{ fontSize: 13, color: color, marginTop: 2 }}>{topCap.captures} przejęć</div>
+                      </div>,
+                    ];
+                  })}
+                </div>
+              );
+            })()}
 
             {/* Timeline */}
             <Card style={{ marginBottom: 20 }}>
@@ -283,9 +299,6 @@ export default function App() {
               )}
               {activeTab === 'teams' && (
                 <DataTable columns={teamColumns} rows={data.teams} />
-              )}
-              {activeTab === 'raw' && (
-                <DataTable columns={rawColumns} rows={data.rows} />
               )}
             </Card>
           </div>
